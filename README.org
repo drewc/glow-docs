@@ -1,0 +1,6 @@
+#+TITLE: Glow Documents and Documentation
+
+[[https://glow-lang.org][Glow]] is a programming language used to make decentralized applications on
+blockchains. Because the basic premise is to make development of such apps user
+friendly documenting and testing the components helps all parties.
+

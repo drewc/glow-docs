@@ -1,0 +1,126 @@
+#+TITLE: Distribution of the Glow Ecosystem
+
+* Introduction
+
+Because *Glow* is based on blockchains, and in general blockchain transactions
+involve a wee bit of GAS costs, we want to keep things the same across the user board.
+
+Just as there are many approaches to that so are there many uses. This is where
+we try to unite them.
+
+
+* Guix Archive: start at the same page.
+
+Ideally the developers are using the same version of everything related. But,
+they may choose to use different operating systems on different computers and
+that matters somewhat.
+
+"The guix archive command allows users to export files from the store into a single archive, and to later import them on a machine that runs Guix. In particular, it allows store files to be transferred from one machine to the store on another machine."
+--https://guix.gnu.org/manual/en/guix.html#Invoking-guix-archive
+
+Ah brilliant.
+
+#+begin_src shell
+guix archive --export --recursive glow > glow-0.0.3.nar
+gzip -9 glow-0.0.3.nar
+#+end_src
+
+** Import to a new machine Running GuixSD
+
+Now that we have the ~.nar.gz~ we can try to import it to another box.
+
+First we need to authorize the key the archive was created under.
+
+Copy the key over
+
+#+begin_src shell
+export UPSTREAM_IP=45.79.3.10
+
+sudo cp /etc/guix/signing-key.pub /tmp/; sudo chown $USER /tmp/signing-key.pub
+scp /tmp/signing-key.pub $UPSTREAM_IP:druix/downstream-key.pub
+#+end_src
+
+
+Now on the box we want to import the store, add the key to the configuration file.
+
+#+begin_src scheme
+(modify-services %base-services
+  (guix-service-type config =>
+                     (guix-configuration
+                      (inherit config)
+                      (authorized-keys
+                       (append (list (local-file "./downstream-key.pub"))
+                               %default-authorized-guix-keys)))))
+#+end_src
+
+Then copy over the ~.nar.gz~.
+
+#+begin_src shell
+scp glow-0.0.3.nar.gz $UPSTREAM_IP:druix/
+#+end_src
+
+Then on that *UPSTREAM* box import the ~.nar~.
+
+#+begin_src shell
+zcat ~/druix/glow-0.0.3.nar.gz | guix archive --import
+#+end_src
+
+
+That seems to work! Let's try another distro.
+
+** Install the archive on Ubuntu
+
+This is a brand new VPS and the first time logging in.
+
+*** Install Guix
+
+#+begin_src src
+cd /tmp
+wget https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh
+chmod +x guix-install.sh
+./guix-install.sh
+#+end_src
+
+*** Add a user and logout
+#+begin_src shell
+adduser --ingroup sudo drewc
+exit
+#+end_src
+
+*** Copy over the key and the ~.nar.gz~
+
+#+begin_src shell
+export UBUNTU_IP=198.58.114.24
+
+ssh-copy-id drewc@$UBUNTU_IP
+
+sudo cp /etc/guix/signing-key.pub /tmp/; sudo chown $USER /tmp/signing-key.pub
+scp /tmp/signing-key.pub $UBUNTU_IP:downstream-key.pub
+
+
+scp glow-0.0.3.nar.gz $UBUNTU_IP:
+#+end_src
+
+*** Add the channel to Ubuntu
+
+#+begin_src shell
+ssh $UBUNTU_IP <<'EOF'
+mkdir -p  ~/.config/guix/
+cat > ~/.config/guix/channels.scm <<'EOFO'
+ (cons*
+  (channel
+    (name 'druix)
+    (url "https://github.com/drewc/druix.git")
+    (branch "main"))
+  %default-channels)
+EOFO
+
+guix pull
+EOF
+#+end_src
+*** Authorize and import!
+
+#+begin_src shell
+sudo guix archive --authorize < downstream-key.pub
+
+#+end_src
