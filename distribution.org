@@ -8,6 +8,528 @@ involve a wee bit of GAS costs, we want to keep things the same across the user 
 Just as there are many approaches to that so are there many uses. This is where
 we try to unite them.
 
+* Reproduction: A profile becomes a manifest with channels
+
+When trying to make it bit-for-bit it turns out that many things can differ across machines regardless of attempts to re-create. In specific, because ~guix~ itself is updated every quarter-hour or so, making two boxes identical becomes a minor issue.
+
+But, with a profile, we can do exacly what we need (I hope).
+
+Let's start. We want to package *Glow*. A quick ~guix search glow~ gives us this:
+
+#+begin_src conf
+name: glow
+version: 0.0.3
+outputs: out
+systems: x86_64-linux i686-linux
+dependencies: bash@5.0.16 coreutils-minimal@8.32 gerbil-crypto@0.0-16-g4c7c4a85 gerbil-ethereum@0.0-285-gbb6dc2c6 gerbil-ftw@0.0-24-g22fb47f3 gerbil-libp2p@0.0-87-g04d187dc
++ gerbil-persist@0.0-19-g75d4c45b gerbil-poo@0.0-96-g8ab28efe gerbil-unstable@0.16-192-gfa9537be gerbil-utils@0.2-129-g806ee9a1 gloui-spa@0.5.1 glow-lang@0.1.0-182-ged0bd72d
++ smug-gerbil@0.4.20-gcf23a47d sqlite@3.31.1
+location: druix/packages/glow.scm:11:2
+homepage: https://gitlab.com/drewc/glow-contacts
+license: ASL 2.0
+synopsis: A distribution of Glow, a language for DApps
+description: Glow is a programming language used to make decentralized applications, otherwise known as DApps
+relevance: 30
+#+end_src
+
+That has all the versions! That may be all we need but, one step at a time.
+
+** Profiles
+
+Here's the ~guix package~ docs for profiles.
+
+#+begin_quote
+*--profile=/profile/*
+*-p profile*
+
+Use /profile/ instead of the user’s default profile.
+
+/profile/ must be the name of a file that will be created upon completion. Concretely, /profile/ will be a mere symbolic link (“symlink”) pointing to the actual profile where packages are installed:
+
+$ guix install hello -p ~/code/my-profile
+…
+$ ~/code/my-profile/bin/hello
+Hello, world!
+
+
+All it takes to get rid of the profile is to remove this symlink and its siblings that point to specific generations:
+
+$ rm ~/code/my-profile ~/code/my-profile-*-link
+#+end_quote
+
+Let's roll with it and create one for Glow developers.
+
+#+begin_src shell
+guix install glow -p ~/me/MuKn/dist/guix/glow-dev
+#+end_src
+
+** Manifest
+
+We need a manifest. As luck would have it, ~guix~ has that in mind.
+
+#+begin_quote
+*--export-manifest*
+
+Write to standard output a manifest suitable for *--manifest* corresponding to
+the chosen profile(s).
+
+This option is meant to help you migrate from the “imperative” operating mode—running guix install, guix upgrade, etc.—to the declarative mode that *--manifest* offers.
+
+Be aware that the resulting manifest approximates what your profile actually
+contains; for instance, depending on how your profile was created, it can refer
+to packages or package versions that are not exactly what you specified.
+
+Keep in mind that a manifest is purely symbolic: it only contains package names
+and possibly versions, and their meaning varies over time. If you wish to “pin”
+channels to the revisions that were used to build the profile(s), see
+*--export-channels* below.
+#+end_quote
+
+Let's try it!
+
+#+begin_src shell
+$ guix package -p ~/me/MuKn/dist/guix/glow-dev --export-manifest
+;; This "manifest" file can be passed to 'guix package -m' to reproduce
+;; the content of your profile.  This is "symbolic": it only specifies
+;; package names.  To reproduce the exact same profile, you also need to
+;; capture the channels being used, as returned by "guix describe".
+;; See the "Replicating Guix" section in the manual.
+
+(specifications->manifest (list "glow"))
+#+end_src
+
+Ok, well, I know from experience that the build can differ that ~"glow"~
+specifications from one box to another.
+
+This is where channels come in.
+
+** Channels
+
+#+begin_quote
+*--export-channels*
+Write to standard output the list of channels used by the chosen profile(s), in a format suitable for ~guix pull --channels~ or ~guix time-machine --channels~ (see Channels).
+
+Together with ~--export-manifest~, this option provides information allowing you to replicate the current profile (see Replicating Guix).
+
+However, note that the output of this command approximates what was actually used to build this profile. In particular, a single profile might have been built from several different revisions of the same channel. In that case, ~--export-manifest~ chooses the last one and writes the list of other revisions in a comment. If you really need to pick packages from different channel revisions, you can use inferiors in your manifest to do so (see Inferiors).
+
+Together with ~--export-manifest~, this is a good starting point if you are willing to migrate from the “imperative” model to the fully declarative model consisting of a manifest file along with a channels file pinning the exact channel revision(s) you want.
+#+end_quote
+
+Awesome! That migration is exactly what I'm doing.
+
+#+begin_src scheme
+;; $ guix package -p ~/me/MuKn/dist/guix/glow-dev --export-channels  > glow-dev-channels.scm
+
+;; This channel file can be passed to 'guix pull -C' or to
+;; 'guix time-machine -C' to obtain the Guix revision that was
+;; used to populate this profile.
+
+(list
+     (channel
+       (name 'guix)
+       (url "https://git.savannah.gnu.org/git/guix.git")
+       (commit
+         "9d32e6cdad050b8c12cfda753cf4bb21910416dc")
+       (introduction
+         (make-channel-introduction
+           "9edb3f66fd807b096b48283debdcddccfea34bad"
+           (openpgp-fingerprint
+             "BBB0 2DDF 2CEA F6A8 0D1D  E643 A2A0 6DF2 A33A 54FA"))))
+     (channel
+       (name 'druix)
+       (url "https://github.com/drewc/druix.git")
+       (commit
+         "c5aa26ea91b3caea4aac03899d4d7731e0b6d2a9"))
+#+end_src
+
+Yes! That's brilliant. Now, as luck would have it, after reading more of the
+docs, there is now a technology preview for inferiors which is exactly what we need here.
+
+** Inferiors
+
+#+begin_quote
+Sometimes you might need to mix packages from the revision of Guix you’re currently running with packages available in a different revision of Guix. Guix inferiors allow you to achieve that by composing different Guix revisions in arbitrary ways.
+-- https://guix.gnu.org/manual/en/html_node/Inferiors.html
+#+end_quote
+
+
+First let us update our installation as we want more packages for developers.
+
+#+begin_src shell
+guix install glow glow-lang gerbil-ethereum go-ethereum gambit-c-unstable \
+    -p ~/me/MuKn/dist/guix/glow-dev
+# The following package will be upgraded:
+#    glow (dependencies or package changed)
+
+# The following packages will be installed:
+#    gambit-c-unstable 4.9.3-1427-g46618e76
+#    gerbil-ethereum   0.0-285-gbb6dc2c6
+#    glow-lang         0.1.0-182-ged0bd72d
+#    go-ethereum 1.10.6
+#+end_src
+
+What does that do for our exported manifest?
+
+#+begin_src scheme
+$ guix package -p ~/me/MuKn/dist/guix/glow-dev --export-manifest
+;; This "manifest" file can be passed to 'guix package -m' to reproduce
+;; the content of your profile.  This is "symbolic": it only specifies
+;; package names.  To reproduce the exact same profile, you also need to
+;; capture the channels being used, as returned by "guix describe".
+;; See the "Replicating Guix" section in the manual.
+
+(specifications->manifest
+  (list "gambit-c-unstable"
+        "go-ethereum"
+        "gerbil-ethereum"
+        "glow-lang"
+        "glow"))
+#+end_src
+
+Ok, still no versions there. Now, we can specify them, but I also know that the version is arbitrary. The better (only) real way seems to be inferiors.
+
+** Inferiour manifest: Take One ... action!
+:PROPERTIES:
+:CUSTOM_ID: inferiourManifest
+:END:
+
+#+begin_src scheme :tangle dist/glow-dev-manifest.scm :mkdirp t
+(use-modules (guix inferior) (guix channels)
+             (srfi srfi-1))   ;for 'first'
+
+(define channels
+  ;; This is the old revisions from which we want to
+  ;; extract glow and friends.
+  (list
+     (channel
+       (name 'guix)
+       (url "https://git.savannah.gnu.org/git/guix.git")
+       (commit
+         "9d32e6cdad050b8c12cfda753cf4bb21910416dc")
+       (introduction
+         (make-channel-introduction
+           "9edb3f66fd807b096b48283debdcddccfea34bad"
+           (openpgp-fingerprint
+             "BBB0 2DDF 2CEA F6A8 0D1D  E643 A2A0 6DF2 A33A 54FA"))))
+     (channel
+       (name 'druix)
+       (url "https://github.com/drewc/druix.git")
+       (commit
+         "c5aa26ea91b3caea4aac03899d4d7731e0b6d2a9"))))
+
+(define inferior
+  ;; An inferior representing the above revision.
+  (inferior-for-channels channels))
+
+(define (inferior->package name)
+  (first (lookup-inferior-packages inferior name)))
+
+;; Now create a manifest with the old packages.
+(packages->manifest
+ (map inferior->package
+      (list "gambit-c-unstable"
+            "go-ethereum"
+            "gerbil-ethereum"
+            "glow-lang"
+            "glow")))
+#+end_src
+
+Let's try it out with a test profile and see.
+
+#+begin_src shell
+guix package --manifest=$HOME/me/MuKn/src/glow-docs/dist/glow-dev-manifest.scm -p $HOME/me/MuKn/dist/guix/glow-test
+#+end_src
+
+To test it out we can ~--list-installed~.
+
+#+begin_src shell
+guix package -p ~/me/MuKn/dist/guix/glow-test --list-installed
+# glow                    0.0.3                   out     /gnu/store/l0az9hqcfbrffcjs6ccy1643mgicrxaq-glow-0.0.3
+# glow-lang               0.1.0-182-ged0bd72d     out     /gnu/store/zcngpc03xqrmcl5gma12420s63yqa92s-glow-lang-0.1.0-182-ged0bd72d
+# gerbil-ethereum         0.0-285-gbb6dc2c6       out     /gnu/store/vmjwdbq3lx40qcwpw5svdhhdsrmpp2dk-gerbil-ethereum-0.0-285-gbb6dc2c6
+# go-ethereum             1.10.6                  out     /gnu/store/pklf4xsn4fzxx1srw1a485y9687aplcb-go-ethereum-1.10.6
+# gambit-c-unstable       4.9.3-1427-g46618e76    out     /gnu/store/5dg1zzz7sqv9kpiqjs4pxp8jj4qgw9h4-gambit-c-unstable-4.9.3-1427-g46618e76
+# drewc@guyix ~/me/MuKn/dist/guix$ guix package -p ~/me/MuKn/dist/guix/glow-dev --list-installed
+# glow                    0.0.3                   out     /gnu/store/l0az9hqcfbrffcjs6ccy1643mgicrxaq-glow-0.0.3
+# glow-lang               0.1.0-182-ged0bd72d     out     /gnu/store/zcngpc03xqrmcl5gma12420s63yqa92s-glow-lang-0.1.0-182-ged0bd72d
+# gerbil-ethereum         0.0-285-gbb6dc2c6       out     /gnu/store/vmjwdbq3lx40qcwpw5svdhhdsrmpp2dk-gerbil-ethereum-0.0-285-gbb6dc2c6
+# go-ethereum             1.10.6                  out     /gnu/store/pklf4xsn4fzxx1srw1a485y9687aplcb-go-ethereum-1.10.6
+# gambit-c-unstable       4.9.3-1427-g46618e76    out     /gnu/store/5dg1zzz7sqv9kpiqjs4pxp8jj4qgw9h4-gambit-c-unstable-4.9.3-1427-g46618e76
+#+end_src
+
+Nice, identical!
+
+** The ~glow-VERSION.nar.gz~ file
+:PROPERTIES:
+:CUSTOM_ID: glowNarFile
+:END:
+
+So here's the idea. If we archive via ~--export~ that profile, recursively,
+and then ~--import~ it on a new box when we then ~guix package --manifest~ no
+files will be downloaded or built as they are all in the store.
+
+#+begin_src shell
+guix archive --export --recursive $(readlink -f ~/me/MuKn/dist/guix/glow-dev) > glow-0.0.3-dev.nar
+gzip -9 ./*.nar
+#+end_src
+
+That ends up with a giant file. We don't need that many packages.
+
+*** Minimize
+
+In fact, we only need those in the *druix* channel. So, for packages we show
+that are in the channel grab the dependencies and make them unique.
+
+There is one package that does not exist. Filter it out.
+
+#+begin_src shell
+filter () {
+ filt='';
+    for del in $@;
+    do
+        if [[ ! $del =~ gambit-c-unstable-bootstrap.* ]];
+         then
+             filt="$filt $del";
+        fi ;
+    done
+    echo $filt
+}
+#+end_src
+
+Now find the dependencies
+
+#+begin_src shell
+getdeps () {
+    guix show $(filter $@) | recsel -P dependencies -e "location ~ 'druix'" -UC | tr ' ' '\n' | sort -u -;
+}
+#+end_src
+
+Now, some of those deps may not be in *druix*
+
+#+begin_src shell
+getdruix () { guix show $@ | recsel -e "location ~ 'druix'" -Pname -CU; }
+#+end_src
+
+So, let's make a function that finds all the druix packages that need installed.
+
+
+***** ~getinstall~
+:PROPERTIES:
+:CUSTOM_ID: getInstall
+:END:
+
+#+begin_src shell
+getinstall () {
+    in=$(filter $@)
+    pkgs=`getdruix $in $(filter $(getdeps $in)) | sort -u -`
+    # echo "Found" $pkgs
+    pkgdeps=$(filter `getdeps $pkgs`)
+    deps=$(filter `getdruix $pkgs $pkgdeps`)
+    # echo "And deps" $deps
+    new=$(echo $pkgs $deps | tr ' ' '\n' | sort -u -)
+    # echo "now new" $new
+
+    if [[ ! $new  == $pkgs ]]
+    then getinstall $new
+    else echo $pkgs
+    fi
+}
+#+end_src
+
+Now we can use that to create a profile.
+
+#+begin_src shell
+guix install $(getinstall glow) -p ~/me/MuKn/dist/guix/glow-dev
+#+end_src
+
+#+begin_quote
+The following packages will be installed:
+   gambit-c-unstable 4.9.3-1427-g46618e76
+   gerbil-crypto     0.0-16-g4c7c4a85
+   gerbil-ethereum   0.0-285-gbb6dc2c6
+   gerbil-ftw        0.0-24-g22fb47f3
+   gerbil-libp2p     0.0-87-g04d187dc
+   gerbil-persist    0.0-19-g75d4c45b
+   gerbil-poo        0.0-96-g8ab28efe
+   gerbil-unstable   0.16-192-gfa9537be
+   gerbil-utils      0.2-129-g806ee9a1
+   gloui-spa         0.5.1
+   glow              0.0.3
+   glow-lang         0.1.0-182-ged0bd72d
+   smug-gerbil       0.4.20-gcf23a47d
+#+end_quote
+
+**** Non-recursive ~guix archive~
+
+That's great! Now we create a non-recursive archive as the substitutes can
+almost all be found on the guix build farm.
+
+To find the actual store we can use ~guix package --list-installed~ and cut out what we do not need.
+
+#+begin_src shell
+profile_store_files () {
+    guix package -p $1 --list-installed | cut -f4;
+}
+#+end_src
+
+Then we can archive just those files.
+
+#+begin_src shell
+guix archive \
+    --export $(profile_store_files ~/me/MuKn/dist/guix/glow-dev) \
+    > glow-0.0.3-dev.nar
+gzip -9 ./*.nar
+#+end_src
+
+
+** Guix built packages: Another manifest
+
+There are dependencies. The goal is to get guix from guix rather than pack it.
+
+#+begin_src scheme :tangle dist/glow-guix-deps.scm
+
+(use-modules (guix inferior) (guix channels) (srfi srfi-1))
+
+(define channels
+  ;; This is the old revisions from which we want to
+  ;; extract glow and friends.
+  (list
+     (channel
+       (name 'guix)
+       (url "https://git.savannah.gnu.org/git/guix.git")
+       (commit
+         "9d32e6cdad050b8c12cfda753cf4bb21910416dc")
+       (introduction
+         (make-channel-introduction
+           "9edb3f66fd807b096b48283debdcddccfea34bad"
+           (openpgp-fingerprint
+            "BBB0 2DDF 2CEA F6A8 0D1D  E643 A2A0 6DF2 A33A 54FA"))))))
+
+(define inferior
+  ;; An inferior representing the above revision.
+  (inferior-for-channels channels))
+
+(define (inferior->package name)
+  (first (lookup-inferior-packages inferior name)))
+
+;; Now create a manifest with the old packages.
+(packages->manifest
+ (map inferior->package
+      (list "lmdb" "libyaml" "libxml2" "mysql" "leveldb" "libsecp256k1" "bash")))
+#+end_src
+
+#+begin_src shell
+cp dist/glow-guix-deps.scm ~/me/MuKn/dist/guix/
+#+end_src
+
+#+RESULTS:
+
+** Inferiour manifest: Take Two, meta time
+:PROPERTIES:
+:CUSTOM_ID: inferiourManifestMeta
+:END:
+
+
+First, in our [[#inferiourManifest][first take]], we look for the inferiour packages that we take from a
+list of strings exported by ~guix package~.
+
+This time around we built a [[#getInstall][getinstall]] shell function that gives us our
+installed packages. We'll simply make that into a list of symbols that become
+strings.
+
+#+begin_src shell
+install_list () {
+ cat <<EOF
+(define packages (map symbol->string '($(getinstall $@))))
+EOF
+}
+#+end_src
+
+Then we make a manifest.
+
+#+begin_src shell
+make_manifest () {
+    commit=$1
+    pkgs=$2
+
+cat <<EOF
+(use-modules (guix inferior) (guix channels)
+             (srfi srfi-1))   ;for 'first'
+(define channels
+  ;; This is the old revisions from which we want to
+  ;; extract glow and friends.
+  (list
+     (channel
+       (name 'guix)
+       (url "https://git.savannah.gnu.org/git/guix.git")
+       (commit
+         "9d32e6cdad050b8c12cfda753cf4bb21910416dc")
+       (introduction
+         (make-channel-introduction
+           "9edb3f66fd807b096b48283debdcddccfea34bad"
+           (openpgp-fingerprint
+             "BBB0 2DDF 2CEA F6A8 0D1D  E643 A2A0 6DF2 A33A 54FA"))))
+     (channel
+       (name 'druix)
+       (url "https://github.com/drewc/druix.git")
+       (commit "$commit"))))
+
+(define inferior
+  ;; An inferior representing the above revision.
+  (inferior-for-channels channels))
+
+(define (inferior->package name)
+  (first (lookup-inferior-packages inferior name)))
+
+$(install_list $pkgs)
+
+(packages->manifest
+ (map inferior->package packages))
+
+EOF
+
+}
+#+end_src
+
+Let's try it out, again, with a test profile and see.
+
+#+begin_src shell
+TESTPROF=$HOME/me/MuKn/dist/guix/glow-test
+COMMIT="c5aa26ea91b3caea4aac03899d4d7731e0b6d2a9"
+
+rm $TESTPROF
+
+
+cd /tmp
+MANI=`mktemp`
+make_manifest $COMMIT glow > $MANI
+
+guix package --manifest=$MANI -p $TESTPROF
+cd -
+#+end_src
+
+To test it out we can ~--list-installed~.
+
+#+begin_src shell
+list_installed () {
+ guix package -p $1 --list-installed  | cut -f4 | tr ' ' '\n' | sort -d
+}
+TE=`list_installed ~/me/MuKn/dist/guix/glow-test`
+DE=`list_installed ~/me/MuKn/dist/guix/glow-dev`
+
+[[ $DE == $TE ]] && echo yup! || echo boo! # => yup!
+#+end_src
+
+Nice, identical!
+
+We'll use it to make a file we can upload elsewhere along with the archive.
+
+#+begin_src shell
+COMMIT="c5aa26ea91b3caea4aac03899d4d7731e0b6d2a9"
+make_manifest $COMMIT glow > glow-dev-manifest.scm
+#+end_src
+
 
 * Guix Archive: start at the same page.
 
@@ -18,28 +540,116 @@ that matters somewhat.
 "The guix archive command allows users to export files from the store into a single archive, and to later import them on a machine that runs Guix. In particular, it allows store files to be transferred from one machine to the store on another machine."
 --https://guix.gnu.org/manual/en/guix.html#Invoking-guix-archive
 
-Ah brilliant.
+Ah brilliant. We've [[#glowNarFile][already done so]] and created a ~.nar.gz~ file.
+
+** Install the archive on Ubuntu
+
+This is a brand new VPS and the first time logging in.
 
 #+begin_src shell
-guix archive --export --recursive glow > glow-0.0.3.nar
-gzip -9 glow-0.0.3.nar
+export UBUNTU_IP=198.58.114.245
+ssh-keygen -R $UBUNTU_IP
+ssh root@$UBUNTU_IP hostnamectl set-hostname gubuntu
 #+end_src
+
+*** Install Guix
+
+#+begin_src shell
+ssh -tt root@$UBUNTU_IP '
+cd /tmp
+wget https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh
+chmod +x guix-install.sh
+./guix-install.sh 2>&1'
+#+end_src
+
+*** Add a user and logout
+#+begin_src shell
+ssh -tt root@$UBUNTU_IP adduser --ingroup sudo drewc
+#+end_src
+
+*** Copy over the key and the ~.nar.gz~ and the manifests
+
+#+begin_src shell
+KEYNAME=glow-dev-key.pub
+
+sudo sh <<EOF
+cp /etc/guix/signing-key.pub /tmp/$KEYNAME;
+sudo chown $USER /tmp/$KEYNAME
+EOF
+
+cp /tmp/$KEYNAME .
+#+end_src
+
+#+begin_src shell
+ssh-copy-id drewc@$UBUNTU_IP
+
+ssh drewc@$UBUNTU_IP mkdir -p ~/druix
+
+KEYNAME=glow-dev-key.pub
+scp $KEYNAME drewc@$UBUNTU_IP:druix/
+
+
+scp glow-0.0.3-dev.nar.gz $UBUNTU_IP:druix
+scp glow-dev-manifest.scm  $UBUNTU_IP:druix
+scp glow-guix-deps.scm  $UBUNTU_IP:druix
+scp glow-dev-channels.scm  $UBUNTU_IP:druix
+#+end_src
+
+*** Install guix packages
+
+#+begin_src shell
+ssh -tt drewc@$UBUNTU_IP bash <<'EOF'
+ cd /tmp/
+ PRO=`mktemp PROFILE_XXXXXX`
+ guix package -p $PRO --manifest=$HOME/druix/glow-guix-deps.scm
+ exit
+EOF
+#+end_src
+
+*** Authorize the key and import the ~nar.gz~
+
+This is all one on the Ubuntu box.
+
+#+begin_src shell
+ssh -tt $UBUNTU_IP 'sudo guix archive --authorize < ~/druix/glow-dev-key.pub'
+
+ssh $UBUNTU_IP 'zcat ~/druix/glow-0.0.3-dev.nar.gz | guix archive --import'
+#+end_src
+
+*** Install ~glow~ to the default profile and test
+
+#+begin_src shell
+ssh $UBUNTU_IP 'guix package --manifest=$HOME/druix/glow-dev-manifest.scm'
+#+end_src
+
 
 ** Import to a new machine Running GuixSD
 
 Now that we have the ~.nar.gz~ we can try to import it to another box.
 
+*** Authorize the signing key for our archive.
+
 First we need to authorize the key the archive was created under.
 
-Copy the key over
+So, copy the public key to a useable location.
+
+#+begin_src shell
+KEYNAME=glow-dev-key.pub
+
+sudo sh <<EOF
+cp /etc/guix/signing-key.pub /tmp/$KEYNAME;
+sudo chown $USER /tmp/$KEYNAME
+EOF
+
+#+end_src
+
+Now upload it.
 
 #+begin_src shell
 export UPSTREAM_IP=45.79.3.10
 
-sudo cp /etc/guix/signing-key.pub /tmp/; sudo chown $USER /tmp/signing-key.pub
-scp /tmp/signing-key.pub $UPSTREAM_IP:druix/downstream-key.pub
+scp /tmp/$KEYNAME $UPSTREAM_IP:druix/$KEYNAME
 #+end_src
-
 
 Now on the box we want to import the store, add the key to the configuration file.
 
@@ -49,78 +659,60 @@ Now on the box we want to import the store, add the key to the configuration fil
                      (guix-configuration
                       (inherit config)
                       (authorized-keys
-                       (append (list (local-file "./downstream-key.pub"))
+                       (append (list (local-file "./glow-dev-key.pub"))
                                %default-authorized-guix-keys)))))
 #+end_src
 
-Then copy over the ~.nar.gz~.
+Also, on the upstream box, reconf things.
 
 #+begin_src shell
-scp glow-0.0.3.nar.gz $UPSTREAM_IP:druix/
+sudo guix system reconfigure ~/druix/druix-config.scm
+sudo herd restart guix-daemon
 #+end_src
+
+*** Upload the ~.nar~ and the manifest
+
+Then copy from downstream (AKA drewc's laptop) the ~.nar.gz~.
+
+#+begin_src shell
+scp glow-0.0.3-dev.nar.gz $UPSTREAM_IP:druix/
+#+end_src
+
+Now the [[#inferiourManifest][Inferiour manifest]] to install.
+
+#+begin_src shell
+cp $HOME/me/MuKn/src/glow-docs/dist/glow-dev-manifest.scm .
+
+scp glow-dev-manifest.scm $UPSTREAM_IP:druix/
+#+end_src
+
+*** On the upstream import and install
 
 Then on that *UPSTREAM* box import the ~.nar~.
 
 #+begin_src shell
-zcat ~/druix/glow-0.0.3.nar.gz | guix archive --import
+zcat ~/druix/glow-0.0.3.nar.gz | guix archive --import --debug=5
 #+end_src
 
-
-That seems to work! Let's try another distro.
-
-** Install the archive on Ubuntu
-
-This is a brand new VPS and the first time logging in.
-
-*** Install Guix
-
-#+begin_src src
-cd /tmp
-wget https://git.savannah.gnu.org/cgit/guix.git/plain/etc/guix-install.sh
-chmod +x guix-install.sh
-./guix-install.sh
-#+end_src
-
-*** Add a user and logout
-#+begin_src shell
-adduser --ingroup sudo drewc
-exit
-#+end_src
-
-*** Copy over the key and the ~.nar.gz~
+That seems to work.
 
 #+begin_src shell
-export UBUNTU_IP=198.58.114.24
-
-ssh-copy-id drewc@$UBUNTU_IP
-
-sudo cp /etc/guix/signing-key.pub /tmp/; sudo chown $USER /tmp/signing-key.pub
-scp /tmp/signing-key.pub $UBUNTU_IP:downstream-key.pub
-
-
-scp glow-0.0.3.nar.gz $UBUNTU_IP:
+PROFS=~/druix/profiles
+mkdir -p PROFS
+guix package --manifest=$HOME/druix/glow-dev-manifest.scm -p $PROFS/glow-dev
 #+end_src
 
-*** Add the channel to Ubuntu
+Now ~--list-installed~?
 
 #+begin_src shell
-ssh $UBUNTU_IP <<'EOF'
-mkdir -p  ~/.config/guix/
-cat > ~/.config/guix/channels.scm <<'EOFO'
- (cons*
-  (channel
-    (name 'druix)
-    (url "https://github.com/drewc/druix.git")
-    (branch "main"))
-  %default-channels)
-EOFO
-
-guix pull
-EOF
+guix package -p $PROFS/glow-dev --list-installed
+# glow                    0.0.3                   out     /gnu/store/l0az9hqcfbrffcjs6ccy1643mgicrxaq-glow-0.0.3
+# glow-lang               0.1.0-182-ged0bd72d     out     /gnu/store/zcngpc03xqrmcl5gma12420s63yqa92s-glow-lang-0.1.0-182-ged0bd72d
+# gerbil-ethereum         0.0-285-gbb6dc2c6       out     /gnu/store/vmjwdbq3lx40qcwpw5svdhhdsrmpp2dk-gerbil-ethereum-0.0-285-gbb6dc2c6
+# go-ethereum             1.10.6                  out     /gnu/store/pklf4xsn4fzxx1srw1a485y9687aplcb-go-ethereum-1.10.6
+# gambit-c-unstable       4.9.3-1427-g46618e76    out     /gnu/store/5dg1zzz7sqv9kpiqjs4pxp8jj4qgw9h4-gambit-c-unstable-4.9.3-1427-g46618e76
 #+end_src
-*** Authorize and import!
 
-#+begin_src shell
-sudo guix archive --authorize < downstream-key.pub
+Nice, the exact same versions. Time to try a non-*GuixSD* box!
 
-#+end_src
+
