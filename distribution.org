@@ -268,13 +268,13 @@ Nice, identical!
 So here's the idea. If we archive via ~--export~ that profile, recursively,
 and then ~--import~ it on a new box when we then ~guix package --manifest~ no
 files will be downloaded or built as they are all in the store.
-
+g
 #+begin_src shell
-guix archive --export --recursive $(readlink -f ~/me/MuKn/dist/guix/glow-dev) > glow-0.0.3-dev.nar
+guix archive --debug=5 --export --recursive $(readlink -f ~/me/MuKn/dist/guix/glow-dev) > glow-0.0.3-dev.nar
 gzip -9 ./*.nar
 #+end_src
 
-That ends up with a giant file. We don't need that many packages.
+That ends up with a giant file.
 
 *** Minimize
 
@@ -567,6 +567,7 @@ chmod +x guix-install.sh
 ssh -tt root@$UBUNTU_IP adduser --ingroup sudo drewc
 #+end_src
 
+
 *** Copy over the key and the ~.nar.gz~ and the manifests
 
 #+begin_src shell
@@ -591,18 +592,19 @@ scp $KEYNAME drewc@$UBUNTU_IP:druix/
 
 scp glow-0.0.3-dev.nar.gz $UBUNTU_IP:druix
 scp glow-dev-manifest.scm  $UBUNTU_IP:druix
-scp glow-guix-deps.scm  $UBUNTU_IP:druix
-scp glow-dev-channels.scm  $UBUNTU_IP:druix
+
+#scp glow-guix-deps.scm  $UBUNTU_IP:druix
+#scp glow-dev-channels.scm  $UBUNTU_IP:druix
 #+end_src
 
-*** Install guix packages
+*** COMMENT Install guix packages
 
 #+begin_src shell
-ssh -tt drewc@$UBUNTU_IP bash <<'EOF'
+ssh -tt drewc@$UBUNTU_IP bash <<'EOF' #
  cd /tmp/
  PRO=`mktemp PROFILE_XXXXXX`
  guix package -p $PRO --manifest=$HOME/druix/glow-guix-deps.scm
- exit
+g exit
 EOF
 #+end_src
 
